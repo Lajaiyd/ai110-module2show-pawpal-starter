@@ -1,0 +1,37 @@
+classDiagram
+    class Pet {
+      - name: str
+      - species: str
+      - feeding_interval: int
+      - exercise_minutes: int
+      + needs_summary() str
+    }
+
+    class Owner {
+      - name: str
+      - wake_up_time: time
+      - sleep_time: time
+      - preferred_task_order: list
+      + can_schedule(duration: int) bool
+      + prefers(task: Task) bool
+    }
+
+    class Task {
+      - title: str
+      - duration: int
+      - priority: int
+      - task_type: str
+      + estimate_end_time(start: time) time
+      + is_high_priority() bool
+    }
+
+    class Scheduler {
+      + generate_daily_plan(owner: Owner, tasks: list) list
+      + sort_tasks(tasks: list) list
+      + filter_tasks(tasks: list, owner: Owner) list
+    }
+
+    Owner "1" --> "1" Pet : cares for
+    Scheduler ..> Owner
+    Scheduler ..> Task
+    Scheduler ..> Pet
