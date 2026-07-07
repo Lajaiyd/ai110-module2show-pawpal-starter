@@ -1,68 +1,116 @@
 """PawPal+ core system classes.
 
-Skeleton generated from diagrams/uml_draft.mmd. Data objects (Pet, Task,
-Owner) use dataclasses; Scheduler holds the scheduling behavior.
-Method bodies are stubs to be implemented.
+Data model:
+    Task      - a single care activity (description, time, frequency, done?).
+    Pet       - pet details plus the list of tasks for that pet.
+    Owner     - a person who manages one or more pets.
+    Scheduler - the "brain" that retrieves and organizes tasks across pets.
+
+Task, Pet, and Owner are dataclasses (they mostly hold data); Scheduler is a
+plain class since it is pure behavior over an Owner's pets.
 """
 
+import datetime
 from dataclasses import dataclass, field
-from datetime import time
+
+
+@dataclass
+class Task:
+    description: str
+    time: datetime.time             # time of day the activity should happen
+    frequency: str = "daily"        # e.g. "daily", "weekly", "once"
+    completed: bool = False
+
+    def mark_complete(self) -> None:
+        """Mark this task as done."""
+        self.completed = True
+
+    def reset(self) -> None:
+        """Mark this task as not yet done (e.g. at the start of a new day)."""
+        self.completed = False
+
+    def __str__(self) -> str:
+        """Return a one-line, readable view of the task."""
+        mark = "✓" if self.completed else "○"
+        return f"{mark} {self.time.strftime('%H:%M')} — {self.description} ({self.frequency})"
 
 
 @dataclass
 class Pet:
     name: str
     species: str
-    feeding_interval: int      # hours between feedings
-    exercise_minutes: int      # target exercise per day
+    tasks: list[Task] = field(default_factory=list)
 
-    def needs_summary(self) -> str:
-        """Return a short human-readable summary of this pet's care needs."""
-        raise NotImplementedError
+    def add_task(self, task: Task) -> None:
+        """Attach a care task to this pet."""
+        self.tasks.append(task)
 
+    def remove_task(self, task: Task) -> None:
+        """Remove a task from this pet (raises ValueError if not present)."""
+        self.tasks.remove(task)
 
-@dataclass
-class Task:
-    title: str
-    duration: int              # minutes
-    priority: int              # higher = more important
-    task_type: str             # e.g. "walk", "feeding", "meds", "grooming"
+    def pending_tasks(self) -> list[Task]:
+        """Return this pet's tasks that are not yet completed."""
+        return [task for task in self.tasks if not task.completed]
 
-    def estimate_end_time(self, start: time) -> time:
-        """Return the clock time this task would finish if begun at `start`."""
-        raise NotImplementedError
-
-    def is_high_priority(self) -> bool:
-        """Return True if this task counts as high priority."""
-        raise NotImplementedError
+    def completed_tasks(self) -> list[Task]:
+        """Return this pet's tasks that are already completed."""
+        return [task for task in self.tasks if task.completed]
 
 
 @dataclass
 class Owner:
     name: str
-    wake_up_time: time
-    sleep_time: time
-    pet: Pet                                        # Owner "cares for" one Pet
-    preferred_task_order: list[str] = field(default_factory=list)
+    pets: list[Pet] = field(default_factory=list)
 
-    def can_schedule(self, duration: int) -> bool:
-        """Return True if `duration` minutes still fit in the owner's day."""
-        raise NotImplementedError
+    def add_pet(self, pet: Pet) -> None:
+        """Add a pet to this owner's care."""
+        self.pets.append(pet)
 
-    def prefers(self, task: Task) -> bool:
-        """Return True if this task ranks in the owner's preferred order."""
-        raise NotImplementedError
+    def find_pet(self, name: str) -> Pet | None:
+        """Return the pet with the given name, or None if not found."""
+        for pet in self.pets:
+            if pet.name == name:
+                return pet
+        return None
+
+    def all_tasks(self) -> list[Task]:
+        """Return every task across all of this owner's pets."""
+        tasks: list[Task] = []
+        for pet in self.pets:
+            tasks.extend(pet.tasks)
+        return tasks
 
 
 class Scheduler:
-    def generate_daily_plan(self, owner: Owner, tasks: list[Task]) -> list[Task]:
-        """Build an ordered, time-feasible plan for the owner's day."""
-        raise NotImplementedError
+    """Organizes and manages tasks across all of an owner's pets."""
 
-    def sort_tasks(self, tasks: list[Task]) -> list[Task]:
-        """Return tasks ordered by scheduling importance (e.g. priority)."""
-        raise NotImplementedError
+    def __init__(self, owner: Owner) -> None:
+        """Create a scheduler that works over the given owner's pets."""
+        self.owner = owner
 
-    def filter_tasks(self, tasks: list[Task], owner: Owner) -> list[Task]:
-        """Return only the tasks that fit the owner's constraints."""
-        raise NotImplementedError
+    def all_tasks(self) -> list[Task]:
+        """Every task the owner has, across all pets."""
+        return self.owner.all_tasks()
+
+    def pending_tasks(self) -> list[Task]:
+        """All not-yet-completed tasks across every pet."""
+        return [task for task in self.all_tasks() if not task.completed]
+
+    def daily_agenda(self) -> list[Task]:
+        """Pending tasks ordered by time of day (earliest first)."""
+        return sorted(self.pending_tasks(), key=lambda task: task.time)
+
+    def tasks_for_pet(self, pet_name: str) -> list[Task]:
+        """All tasks for a single named pet ([] if the pet isn't found)."""
+        pet = self.owner.find_pet(pet_name)
+        return list(pet.tasks) if pet else []
+
+    def tasks_by_frequency(self, frequency: str) -> list[Task]:
+        """All tasks across pets matching a given frequency (e.g. 'daily')."""
+        return [task for task in self.all_tasks() if task.frequency == frequency]
+
+    def reset_all(self) -> None:
+        """Reset every task to not-completed (e.g. to start a fresh day)."""
+        for task in self.all_tasks():
+            task.reset()
