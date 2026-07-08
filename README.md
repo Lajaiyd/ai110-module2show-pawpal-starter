@@ -66,19 +66,39 @@ Today's Schedule for Sam
 
 ## 🧪 Testing PawPal+
 
+Run the full test suite from the project root:
+
 ```bash
-# Run the full test suite:
-pytest
-
-# Run with coverage:
-pytest --cov
+python -m pytest
 ```
 
-Sample test output:
+The tests in `tests/test_pawpal.py` cover the system's core scheduling behaviors:
+
+- **Sorting correctness** — tasks added out of order are returned earliest-time-first, the sort returns a copy (never mutates its input), and tasks at the same time keep their insertion order (stable sort).
+- **Recurrence logic** — completing a `daily` task queues a fresh, uncompleted copy dated for the next day and attached to the same pet; `weekly` recurs seven days out; and `once` tasks are marked done without recurring.
+- **Conflict detection** — two pending tasks at the same time of day are flagged as a single conflict pair with a matching warning, while tasks at distinct times and already-completed tasks raise no conflict.
+- **Edge cases** — an owner with no pets or tasks yields an empty agenda and no conflicts instead of crashing.
+
+Successful test run:
 
 ```
-# Paste your pytest output here
+jideakinyemi@MacBookPro ai110-module2show-pawpal-starter % python -m pytest
+============================================================================================= test session starts =============================================================================================
+platform darwin -- Python 3.13.9, pytest-8.3.4, pluggy-1.5.0
+rootdir: /Users/jideakinyemi/Documents/python-primer/ai110-module2show-pawpal-starter
+plugins: anyio-4.7.0
+collected 12 items
+
+tests/test_pawpal.py ............                                                                                                                                                                       [100%]
+
+============================================================================================= 12 passed in 0.03s ==============================================================================================
 ```
+
+### Confidence Level
+
+**★★★★☆ (4 / 5)**
+
+All 12 tests pass and the three most important behaviors — sorting, recurrence, and conflict detection — are verified across both happy paths and key edge cases. One star is held back because a few known gaps remain untested: three-or-more tasks at the same time (only consecutive pairs are reported), the `start_new_day()` rollover, and the `within_minutes` conflict window. Reliability for the core scheduling logic is high; the confidence ceiling reflects coverage breadth, not observed defects.
 
 ## 📐 Smarter Scheduling
 
