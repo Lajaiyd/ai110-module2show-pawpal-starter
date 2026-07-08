@@ -151,6 +151,145 @@ def test_completed_task_does_not_conflict():
     assert scheduler.conflicts() == []
 
 
+# --- New-day rollover ---------------------------------------------------------
+def test_start_new_day_does_not_duplicate_recurring_tasks():
+    """Complete + roll over should not accumulate duplicate recurring tasks.
+
+    complete_task() already queues the next occurrence, so start_new_day()
+    must retire the finished task rather than resurrect it. Repeated cycles
+    keep exactly one live occurrence.
+    """
+    owner = _owner_with_tasks(Task("Feed", datetime.time(8, 30), frequency="daily"))
+    scheduler = Scheduler(owner)
+
+    for _ in range(3):
+        due = scheduler.daily_agenda()
+        if due:
+            scheduler.complete_task(due[0])
+        scheduler.start_new_day()
+
+    assert len(owner.all_tasks()) == 1
+    assert owner.all_tasks()[0].completed is False
+
+
+def test_start_new_day_drops_completed_once_task():
+    """A finished one-off task is removed and does not come back."""
+    task = Task("Adoption paperwork", datetime.time(10, 0), frequency="once")
+    owner = _owner_with_tasks(task)
+    scheduler = Scheduler(owner)
+
+    scheduler.complete_task(task)
+    scheduler.start_new_day()
+
+    assert owner.all_tasks() == []
+
+
+def test_start_new_day_keeps_pending_tasks():
+    """Tasks left unfinished carry over to the new day untouched."""
+    owner = _owner_with_tasks(Task("Walk", datetime.time(8, 0), frequency="daily"))
+    scheduler = Scheduler(owner)
+
+    scheduler.start_new_day()
+
+    assert len(owner.all_tasks()) == 1
+    assert owner.all_tasks()[0].completed is False
+
+
+# --- Next available slot ------------------------------------------------------
+def test_next_slot_is_day_start_when_schedule_is_empty():
+    """With nothing booked, the earliest slot is the start of the day window."""
+    scheduler = Scheduler(_owner_with_tasks())
+
+    slot = scheduler.next_available_slot(30, day_start=datetime.time(6, 0))
+
+    assert slot == datetime.time(6, 0)
+
+
+def test_next_slot_skips_a_busy_block():
+    """A task at day_start pushes the next slot past its gap window."""
+    scheduler = Scheduler(
+        _owner_with_tasks(Task("Walk", datetime.time(6, 0), frequency="daily"))
+    )
+
+    # 06:00 task blocks 06:00–06:30 (default gap), so 30-min slot lands at 06:30.
+    slot = scheduler.next_available_slot(
+        30, day_start=datetime.time(6, 0), gap_minutes=30
+    )
+
+    assert slot == datetime.time(6, 30)
+
+
+def test_next_slot_fits_into_a_gap_between_tasks():
+    """An opening long enough between two tasks is chosen over a later one."""
+    scheduler = Scheduler(
+        _owner_with_tasks(
+            Task("Walk", datetime.time(8, 0)),   # blocks 08:00–08:30
+            Task("Dinner", datetime.time(18, 0)),
+        )
+    )
+
+    # Earliest 30-min opening is right at day_start (06:00), before the 08:00 task.
+    slot = scheduler.next_available_slot(30, day_start=datetime.time(6, 0))
+
+    assert slot == datetime.time(6, 0)
+
+
+def test_next_slot_returns_none_when_day_is_full():
+    """No opening long enough anywhere in the window yields None, not a guess."""
+    # A tiny 40-minute window with a task blocking its first 30 minutes leaves
+    # only a 10-minute tail — too short for a 30-minute task.
+    scheduler = Scheduler(
+        _owner_with_tasks(Task("Walk", datetime.time(6, 0)))
+    )
+
+    slot = scheduler.next_available_slot(
+        30,
+        day_start=datetime.time(6, 0),
+        day_end=datetime.time(6, 40),
+        gap_minutes=30,
+    )
+
+    assert slot is None
+
+
+# --- JSON persistence ---------------------------------------------------------
+def test_json_round_trip_preserves_pets_and_tasks(tmp_path):
+    """Saving then loading rebuilds pets and tasks, including time/date fields."""
+    owner = Owner("Sam", pets=[Pet("Biscuit", "dog"), Pet("Whiskers", "cat")])
+    owner.pets[0].add_task(Task("Walk", datetime.time(8, 0), frequency="weekly"))
+    owner.pets[0].add_task(
+        Task(
+            "Meds",
+            datetime.time(9, 30),
+            frequency="daily",
+            completed=True,
+            date=datetime.date(2026, 7, 8),
+        )
+    )
+
+    path = tmp_path / "data.json"
+    owner.save_to_json(str(path))
+    loaded = Owner.load_from_json(str(path))
+
+    assert loaded.name == "Sam"
+    assert [pet.name for pet in loaded.pets] == ["Biscuit", "Whiskers"]
+
+    walk, meds = loaded.pets[0].tasks
+    assert walk.time == datetime.time(8, 0)          # datetime.time survives
+    assert walk.frequency == "weekly"
+    assert walk.date is None                          # None round-trips as null
+    assert meds.completed is True
+    assert meds.date == datetime.date(2026, 7, 8)     # datetime.date survives
+
+
+def test_load_missing_file_raises(tmp_path):
+    """Loading a non-existent file raises so callers can start fresh."""
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        Owner.load_from_json(str(tmp_path / "nope.json"))
+
+
 # --- Edge cases ---------------------------------------------------------------
 def test_empty_schedule_is_safe():
     """An owner with no pets/tasks yields an empty agenda and no conflicts."""

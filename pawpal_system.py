@@ -11,6 +11,7 @@ plain class since it is pure behavior over an Owner's pets.
 """
 
 import datetime
+import json
 from dataclasses import dataclass, field
 
 
@@ -58,6 +59,31 @@ class Task:
         mark = "✓" if self.completed else "○"
         return f"{mark} {self.time.strftime('%H:%M')} — {self.description} ({self.frequency})"
 
+    # --- JSON serialization ---------------------------------------------------
+    # datetime.time / datetime.date are not JSON-native, so they are stored as
+    # ISO strings ("08:00:00", "2026-07-08") and parsed back on load.
+    def to_dict(self) -> dict:
+        """Return a plain, JSON-safe dict representation of this task."""
+        return {
+            "description": self.description,
+            "time": self.time.isoformat(),
+            "frequency": self.frequency,
+            "completed": self.completed,
+            "date": self.date.isoformat() if self.date is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a Task from a dict produced by to_dict()."""
+        raw_date = data.get("date")
+        return cls(
+            description=data["description"],
+            time=datetime.time.fromisoformat(data["time"]),
+            frequency=data.get("frequency", "daily"),
+            completed=data.get("completed", False),
+            date=datetime.date.fromisoformat(raw_date) if raw_date else None,
+        )
+
 
 @dataclass
 class Pet:
@@ -80,6 +106,24 @@ class Pet:
     def completed_tasks(self) -> list[Task]:
         """Return this pet's tasks that are already completed."""
         return [task for task in self.tasks if task.completed]
+
+    # --- JSON serialization ---------------------------------------------------
+    def to_dict(self) -> dict:
+        """Return a JSON-safe dict, recursively serializing this pet's tasks."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Pet":
+        """Rebuild a Pet (and its tasks) from a dict produced by to_dict()."""
+        return cls(
+            name=data["name"],
+            species=data["species"],
+            tasks=[Task.from_dict(task) for task in data.get("tasks", [])],
+        )
 
 
 @dataclass
@@ -104,6 +148,40 @@ class Owner:
         for pet in self.pets:
             tasks.extend(pet.tasks)
         return tasks
+
+    # --- JSON serialization & persistence -------------------------------------
+    def to_dict(self) -> dict:
+        """Return a JSON-safe dict for the whole owner → pets → tasks tree."""
+        return {"name": self.name, "pets": [pet.to_dict() for pet in self.pets]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Owner":
+        """Rebuild a full Owner tree from a dict produced by to_dict()."""
+        return cls(
+            name=data["name"],
+            pets=[Pet.from_dict(pet) for pet in data.get("pets", [])],
+        )
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Persist this owner (and all pets/tasks) to a JSON file.
+
+        Writes the nested to_dict() tree with json.dump. Because every value is
+        already a JSON-native type (str / bool / None / list / ISO date strings),
+        no custom encoder is needed.
+        """
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(self.to_dict(), file, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> "Owner":
+        """Load an owner previously saved with save_to_json().
+
+        Raises FileNotFoundError if the file does not exist yet, so callers can
+        decide whether to start fresh — see app.py, which falls back to a new
+        Owner on first run.
+        """
+        with open(path, encoding="utf-8") as file:
+            return cls.from_dict(json.load(file))
 
 
 class Scheduler:
@@ -220,19 +298,20 @@ class Scheduler:
         return follow_up
 
     def start_new_day(self) -> None:
-        """Roll over to a fresh day, respecting each task's frequency.
+        """Roll over to a fresh day by retiring finished tasks.
 
-        Recurring tasks (e.g. 'daily', 'weekly') are reset to pending so they
-        show up again. One-off ('once') tasks that are already done are removed,
-        since they should not recur.
+        A completed task has already served its purpose: complete_task() queues
+        the next occurrence of any recurring task at the moment it is finished,
+        and one-off ('once') tasks should not come back at all. So every
+        completed task is simply removed here. Resetting them to pending instead
+        would resurrect an occurrence whose follow-up already exists, which is
+        how duplicate recurring tasks used to pile up. Tasks still pending just
+        carry over to the new day untouched.
         """
         for pet in self.owner.pets:
             for task in list(pet.tasks):
-                if task.frequency == "once":
-                    if task.completed:
-                        pet.remove_task(task)
-                else:
-                    task.reset()
+                if task.completed:
+                    pet.remove_task(task)
 
     def conflicts(self, within_minutes: int = 0) -> list[tuple[Task, Task]]:
         """Pairs of pending tasks that clash in time.
@@ -275,12 +354,66 @@ class Scheduler:
             )
         return warnings
 
+    # --- Slot finding ---------------------------------------------------------
+    def next_available_slot(
+        self,
+        duration_minutes: int = 30,
+        *,
+        on: datetime.date | None = None,
+        day_start: datetime.time = datetime.time(6, 0),
+        day_end: datetime.time = datetime.time(22, 0),
+        gap_minutes: int = 30,
+    ) -> datetime.time | None:
+        """Earliest free start time for a new task of ``duration_minutes``.
+
+        Walks that day's pending tasks in time order and returns the first
+        opening, inside the ``[day_start, day_end]`` window, that is long enough
+        to fit the new task without overlapping an existing one. Each existing
+        task is treated as occupying ``gap_minutes`` from its start, so tasks are
+        spaced out rather than merely non-identical (a 30-minute default gives
+        every task breathing room). Returns ``None`` when the day has no opening
+        that long — a deliberate "no free slot" answer rather than a guess.
+        """
+        window_start = _to_minutes(day_start)
+        window_end = _to_minutes(day_end)
+        if duration_minutes <= 0 or window_end - window_start < duration_minutes:
+            return None
+
+        # Each pending task blocks [start, start + gap_minutes); sort by start.
+        busy = sorted(
+            (_to_minutes(task.time), _to_minutes(task.time) + gap_minutes)
+            for task in self.daily_agenda(on)
+        )
+
+        cursor = window_start
+        for start, end in busy:
+            usable_end = min(start, window_end)
+            if usable_end - cursor >= duration_minutes:
+                return _from_minutes(cursor)
+            cursor = max(cursor, end)
+            if cursor >= window_end:
+                return None
+
+        if window_end - cursor >= duration_minutes:
+            return _from_minutes(cursor)
+        return None
+
     def reset_all(self) -> None:
         """Reset every task to not-completed (e.g. to start a fresh day)."""
         for task in self.all_tasks():
             task.reset()
 
 
+def _to_minutes(time_of_day: datetime.time) -> int:
+    """Minutes since midnight for a time of day."""
+    return time_of_day.hour * 60 + time_of_day.minute
+
+
+def _from_minutes(total_minutes: int) -> datetime.time:
+    """Time of day for a whole-minute offset since midnight."""
+    return datetime.time(total_minutes // 60, total_minutes % 60)
+
+
 def _minutes_between(earlier: datetime.time, later: datetime.time) -> int:
     """Whole minutes from `earlier` to `later` on the same day."""
-    return (later.hour * 60 + later.minute) - (earlier.hour * 60 + earlier.minute)
+    return _to_minutes(later) - _to_minutes(earlier)

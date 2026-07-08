@@ -1,0 +1,59 @@
+classDiagram
+    class Task {
+      - description: str
+      - time: time
+      - frequency: str
+      - completed: bool
+      - date: date | None
+      - _RECUR_DAYS: dict
+      + mark_complete() None
+      + reset() None
+      + next_occurrence() Task | None
+      + __str__() str
+    }
+
+    class Pet {
+      - name: str
+      - species: str
+      - tasks: list~Task~
+      + add_task(task: Task) None
+      + remove_task(task: Task) None
+      + pending_tasks() list~Task~
+      + completed_tasks() list~Task~
+    }
+
+    class Owner {
+      - name: str
+      - pets: list~Pet~
+      + add_pet(pet: Pet) None
+      + find_pet(name: str) Pet | None
+      + all_tasks() list~Task~
+    }
+
+    class Scheduler {
+      - owner: Owner
+      + all_tasks() list~Task~
+      + pending_tasks() list~Task~
+      + sort_by_time(tasks: list~Task~)$ list~Task~
+      + daily_agenda(on: date) list~Task~
+      + tasks_for_pet(pet_name: str) list~Task~
+      + tasks_by_frequency(frequency: str) list~Task~
+      + filter_tasks(pet_name: str, completed: bool, frequency: str) list~Task~
+      + agenda(pet_name: str, completed: bool, frequency: str) list~Task~
+      + pet_for_task(task: Task) Pet | None
+      + complete_task(task: Task) Task | None
+      + start_new_day() None
+      + conflicts(within_minutes: int) list~tuple~
+      + conflict_warnings(within_minutes: int) list~str~
+      + reset_all() None
+    }
+
+    %% Structural ownership
+    Owner "1" o-- "*" Pet : manages
+    Pet "1" o-- "*" Task : has
+    Scheduler "1" --> "1" Owner : organizes
+
+    %% Behavioral dependencies (Scheduler acts across the model)
+    Scheduler ..> Pet : looks up & adds follow-ups
+    Scheduler ..> Task : creates / completes
+    Task ..> Task : next_occurrence() creates

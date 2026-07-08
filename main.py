@@ -95,6 +95,18 @@ def demonstrate_recurrence(owner: Owner) -> None:
     print(f"Today's agenda now: {[t.description for t in scheduler.daily_agenda()]}")
 
 
+def print_next_available_slot(owner: Owner) -> None:
+    """Ask the scheduler for the earliest free slot for a new task today."""
+    scheduler = Scheduler(owner)
+
+    print("\nNext available slot")
+    print("=" * 32)
+    for minutes in (30, 90):
+        slot = scheduler.next_available_slot(minutes)
+        when = slot.strftime("%H:%M") if slot else "none free today"
+        print(f"  Earliest {minutes:>3}-min opening (06:00–22:00): {when}")
+
+
 def print_by_status(owner: Owner) -> None:
     """Split every task into done vs. pending (filter-by-status demo)."""
     scheduler = Scheduler(owner)
@@ -118,6 +130,7 @@ def main() -> None:
     print_schedule(owner)               # sorting: full agenda by time
     print_conflicts(owner)              # conflict detection (08:00 clash)
     print_pet_agenda(owner, "Biscuit")  # filter by pet + sort
+    print_next_available_slot(owner)    # slot finding: earliest free time today
     demonstrate_recurrence(owner)       # complete recurring tasks -> next occurrence auto-created
     print_by_status(owner)              # filter by completion status
 
