@@ -53,6 +53,16 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 #   09:00 — Feeding (10 min) [priority: high]
 #   ...
 ```
+Today's Schedule for Sam
+================================
+07:30  Whiskers  Breakfast (daily)
+08:00  Biscuit   Morning walk (daily)
+09:00  Whiskers  Litter box clean (daily)
+15:30  Biscuit   Vet check-up (weekly)
+18:00  Biscuit   Dinner (daily)
+--------------------------------
+5 tasks pending across 2 pets
+
 
 ## 🧪 Testing PawPal+
 
@@ -72,14 +82,66 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+All scheduling logic lives on the `Scheduler` class in `pawpal_system.py`, which
+works over one `Owner`'s pets. Each feature below names the method that
+implements it.
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Sorting by time | `Scheduler.sort_by_time()` | Shared primitive used by `daily_agenda()` and `agenda()` |
+| Filtering | `Scheduler.filter_tasks()` / `Scheduler.agenda()` | By pet, completion status, and/or frequency |
+| Conflict detection | `Scheduler.conflicts()` / `Scheduler.conflict_warnings()` | Same-time clashes; warnings never crash |
+| Recurring tasks | `Task.next_occurrence()` / `Scheduler.complete_task()` | Daily/weekly auto-generate the next occurrence |
+
+### Sorting behavior — `Scheduler.sort_by_time(tasks)`
+
+The single place sorting happens. It returns a new list ordered by time of day
+(earliest first) using `sorted(tasks, key=lambda task: task.time)`. This works
+because `Task.time` is a `datetime.time`, which is directly comparable — no
+string parsing needed. Both `daily_agenda()` (today's pending tasks) and
+`agenda(...)` (filtered tasks) route through it, so ordering is defined once.
+
+### Filtering behavior — `Scheduler.filter_tasks(...)`
+
+One composable filter with keyword-only arguments:
+
+```python
+scheduler.filter_tasks(pet_name="Biscuit", completed=False)  # Biscuit's pending tasks
+scheduler.filter_tasks(completed=True)                        # everything already done
+scheduler.filter_tasks(frequency="weekly")                    # all weekly tasks
+```
+
+Any argument left as `None` is ignored, so the same method covers "by pet,"
+"by status," "by frequency," or any combination. `Scheduler.agenda(...)` takes
+the same arguments and additionally sorts the result by time.
+`Scheduler.pet_for_task(task)` is a supporting helper that finds which pet owns
+a task by identity (`is`), so look-alike tasks never resolve to the wrong pet.
+
+### Conflict detection — `Scheduler.conflicts()` and `Scheduler.conflict_warnings()`
+
+`conflicts(within_minutes=0)` scans the time-sorted agenda and returns pairs of
+pending tasks that land at the same time (or within `within_minutes` of each
+other) — an owner can only be in one place at once, whether the clash is for the
+**same pet or two different pets**. `conflict_warnings(...)` is the "lightweight"
+layer on top: it turns each pair into a human-readable string and **returns it
+rather than raising**, so a clash never crashes the program. It distinguishes
+the two cases automatically:
+
+```
+⚠ Conflict at 08:00: Biscuit has two tasks ('Morning walk' and 'Give medication').
+⚠ Conflict at 08:00: Biscuit and Whiskers are both scheduled ('Give medication' and 'Grooming').
+```
+
+### Recurring task logic — `Task.next_occurrence()` and `Scheduler.complete_task()`
+
+`Task.next_occurrence()` builds the next fresh (uncompleted) instance of a
+recurring task: `daily` repeats one day later, `weekly` one week later (via
+`datetime.timedelta`, so month/year/leap-year rollover is handled correctly),
+and `once` returns `None`. `Scheduler.complete_task(task)` is the preferred way
+to finish a task — it marks the task done and, if it recurs, automatically adds
+the next occurrence to the same pet, dated ahead. Because `daily_agenda()` only
+shows tasks due today or earlier, those future occurrences stay hidden until
+their day arrives instead of piling up on today's list.
 
 ## 📸 Demo Walkthrough
 
